@@ -7,8 +7,6 @@
  http://192.168.0.111/?cmd=175682*327 --> Send code 175682 for a period of 327 ms
  http://192.168.0.111 --> See last received code
  
- During first 5 seconds of startup, send out RF signal to learn.
- 
 */
 
 #include <SPI.h>
@@ -249,7 +247,7 @@ void showOldCode(unsigned long receivedCode, unsigned int period) {
   delay(50);
    } 
 
-//httpRequest(); //Doe Request bij binnenkomende data (test)
+httpRequest(); //Doe Request bij binnenkomende data (test)
 
 /*
 if(!client.connected()){
