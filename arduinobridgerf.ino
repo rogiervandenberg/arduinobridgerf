@@ -19,14 +19,13 @@
  *  - Library that applies: 1, 2 or 3 (NewRemoteSwitch, RemoteSwitch or RemoteSensor)
  *  - Code: xxxx (any value)
  *  - Period: xxx (microseconds)
- *  - Additional details: 0000 (4 digits, containing: Type (0=Off, 1=On, 2=Dim), Unit (which light), Dim value (always 0 for now), Group (always 0 for now)
+ *  - Additional details: 0000 (4 digits, containing: Type (0=Off, 1=On, 2=Dim), 2 digits for Unit (which light), Dim value (always 0 for now)
  * 
  * E.g: O,1,2559398,254,1200 (outgoing, NewRemoteswitch, code, period, type 1 / unit 2 / dim 0 / group 0) --> Turn light 2 of remote 2559398 ON.
  */
 
 #include <RemoteReceiver.h>
 #include <RemoteTransmitter.h>
-#include <NewRemoteReceiver.h>
 #include <NewRemoteTransmitter.h>
 #include <InterruptChain.h>
 #include <SPI.h>
@@ -45,34 +44,38 @@ const int transmitterPin = 8;
 // An EthernetUDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
 
+signed short stateCounter = -1; 
+boolean sending = false; 
+
 void setup()
 {
-  pinMode(led, OUTPUT); 
+  pinMode(led, OUTPUT); //For connecting a LED
   
   // Open serial communications and wait for port to open:
-  Serial.begin(9600);
+  Serial.begin(115200);
   
   // start the Ethernet connection:
   Serial.println("Trying to get an IP address using DHCP");
   if (Ethernet.begin(mac) == 0) {
     Serial.println("Failed to configure Ethernet using DHCP");
   }
+
   // print your local IP address:
   Serial.print("My IP address: ");
   Serial.println(Ethernet.localIP());
   Serial.println();
   
+  //Start accepting UDP
   Udp.begin(localPort);
   
-    // Interrupt -1 to indicate you will call the interrupt handler with InterruptChain
+  // Interrupt -1 to indicate you will call the interrupt handler with InterruptChain
   RemoteReceiver::init(-1, 2, handleOldCode);
   
-  // Again, interrupt -1 to indicate you will call the interrupt handler with InterruptChain
-  NewRemoteReceiver::init(-1, 2, handleNewCode);
-
+  attachInterrupt(0, interruptHandler, CHANGE);  
+  
   // On interrupt, call the interrupt handlers of remote and sensor receivers
   InterruptChain::addInterruptCallback(0, RemoteReceiver::interruptHandler);
-  InterruptChain::addInterruptCallback(0, NewRemoteReceiver::interruptHandler);
+  InterruptChain::addInterruptCallback(0, interruptHandler);
 }
 
 void loop() {
@@ -82,26 +85,16 @@ void loop() {
 
   if(packetSize) {
     
-    //Because handling incoming UDP Request without deinitializing the interupts will fail, we deinit them...
-    RemoteReceiver::deinit();
-    NewRemoteReceiver::deinit();
-    
     // read the packet into packetBufffer
     Udp.read(packetBuffer,UDP_TX_PACKET_MAX_SIZE);
     Serial.print("Binnen gekregen: ");
     Serial.println(packetBuffer);
     
     handleCommand(packetBuffer);
-        
-    //and reinit our interupts of course.
-    RemoteReceiver::init(-1, 2, handleOldCode);
-    NewRemoteReceiver::init(-1, 2, handleNewCode);
-
   }
-
-  delay(10);
 }
 
+//If we receive a command, parse it to do something with it
 void handleCommand(char* receivedCommand) {
   Serial.print("Verwerken: ");
   Serial.println(receivedCommand);
@@ -136,6 +129,185 @@ void handleCommand(char* receivedCommand) {
   }
 }
 
+
+
+
+//////////
+
+
+void interruptHandler() 
+{ 
+  if(sending) 
+    return; 
+   
+  static byte receivedBit; 
+  static unsigned long receivedCommand;   
+  static unsigned long lastChange = 0; 
+  unsigned long currentTime=micros(); 
+  unsigned int duration=currentTime-lastChange; 
+  lastChange=currentTime; 
+   
+  if(duration > 2200 && duration < 2800)  // Startbit 
+  { 
+    stateCounter = 0; 
+    receivedBit = 0; 
+    receivedCommand = 0; 
+  } 
+  else if(!(stateCounter & 0x80)) // stateCounter>=0 && stateCounter < 128 
+  { 
+    if(duration > 1500) 
+    { 
+      stateCounter = -1; 
+      return;   
+    } 
+      
+    receivedBit <<= 1; 
+     
+    if(duration > 1000) 
+      receivedBit |= 0x01; 
+
+    if((stateCounter%4) == 3) 
+    { 
+      receivedCommand <<= 1; 
+         
+      if(receivedBit == 4)        // -___-_ '1' 
+        receivedCommand |= 0x01; 
+      else if(receivedBit == 1)   // -_-___ '0' 
+        ;  // No need to handle 
+      else if(receivedBit == 0)   // -_-_  Dimming 
+        ;  // Unhandled for now 
+      else 
+      { 
+        stateCounter = -1; 
+        return;   
+      } 
+         
+      receivedBit = 0; 
+    }   
+
+    stateCounter++; 
+  } 
+  else if(stateCounter == 128) 
+  { 
+    Serial.print(receivedCommand); 
+    Serial.print("  Address:"); 
+    Serial.print(receivedCommand >> 6); 
+    Serial.print("  Group:"); 
+    Serial.print((receivedCommand >> 5)&0x01); 
+    Serial.print("  Cmd:"); 
+    Serial.print((receivedCommand >> 4)&0x01); 
+    Serial.print("  Unit:"); 
+    Serial.println((receivedCommand)&0x0F); 
+               
+               
+     //Broadcasting received RF-signal
+  Udp.beginPacket(broadcast, 8889);
+  Udp.write("I,1,");
+
+  char charBuf[50];
+  String codeString(receivedCommand >> 6);
+  codeString.toCharArray(charBuf, 50);  
+  Udp.write(charBuf);
+  Udp.write(",");
+
+  String periodString("000");
+  periodString.toCharArray(charBuf, 50);  
+  Udp.write(charBuf);
+  Udp.write(",");
+  
+  //Type
+  String typeString((receivedCommand >> 4)&0x01);
+  typeString.toCharArray(charBuf, 50);  
+  Udp.write(charBuf);
+  
+  //Unit
+  String unitString((receivedCommand)&0x0F);
+  if (unitString.length() == 1) {
+    unitString = "0" + unitString;
+  }
+  unitString.toCharArray(charBuf, 50);  
+  Udp.write(charBuf);
+
+  //Dim value
+  String dimString("0");
+  dimString.toCharArray(charBuf, 50);  
+  Udp.write(charBuf);
+  
+  Udp.endPacket();            
+               
+    stateCounter = -1; 
+  } 
+} 
+
+void sendSwitch(unsigned long address, boolean group, boolean state, short unit, short repeats) 
+{ 
+  unsigned long transmitCommand; 
+   
+  transmitCommand = address << 6; 
+  transmitCommand |= group << 5; 
+  transmitCommand |= state<<4; 
+  if(!group) 
+    transmitCommand |= unit & 0x0f; 
+   
+  sendSwitch(transmitCommand, repeats); 
+} 
+
+void sendSwitch(unsigned long transmitCommand, short repeatCount) 
+{ 
+  sending = true; 
+   
+  Serial.print("Sending: "); 
+  Serial.println(transmitCommand); 
+   
+  for(short repeats = 1; repeats <= repeatCount; repeats++) 
+  { 
+    digitalWrite(11, HIGH); 
+    delayMicroseconds(330); 
+    digitalWrite(11, LOW); 
+    delayMicroseconds(2600); 
+   
+    for(short i = 31; i>=0; i--) 
+    { 
+      digitalWrite(11, HIGH); 
+      delayMicroseconds(330);   
+   
+      if(bitRead(transmitCommand, i)) 
+      { 
+        digitalWrite(11, LOW); 
+        delayMicroseconds(1200);   
+        digitalWrite(11, HIGH); 
+        delayMicroseconds(330); 
+        digitalWrite(11, LOW); 
+        delayMicroseconds(200); 
+      } 
+      else 
+      { 
+        digitalWrite(11, LOW); 
+        delayMicroseconds(200);   
+        digitalWrite(11, HIGH); 
+        delayMicroseconds(330); 
+        digitalWrite(11, LOW); 
+        delayMicroseconds(1200); 
+      } 
+    } 
+   
+    digitalWrite(11, HIGH); 
+    delayMicroseconds(330); 
+    digitalWrite(11, LOW); 
+    delayMicroseconds(10200);  
+  } 
+  
+  sending = false;  
+}
+
+
+
+///////
+
+
+
+
+
 // shows the received code sent from an old-style remote switch
 void handleOldCode(unsigned long receivedCode, unsigned int period) {
   // Print the received code.
@@ -162,64 +334,7 @@ void handleOldCode(unsigned long receivedCode, unsigned int period) {
   Udp.endPacket(); 
 }
 
-// Shows the received code sent from an new-style remote switch
-void handleNewCode(NewRemoteCode receivedCode) {
-  // Print the received code.
-  Serial.print("Addr ");
-  Serial.print(receivedCode.address);
-  
-  if (receivedCode.groupBit) {
-    Serial.print(" group");
-  } else {
-    Serial.print(" unit ");
-    Serial.print(receivedCode.unit);
-  }
-  
-  switch (receivedCode.switchType) {
-    case 0:
-      Serial.print(" off");
-      break;
-    case 1:
-      Serial.print(" on");
-      break;
-    case 2:
-      Serial.print(" dim level");
-      Serial.print(receivedCode.dimLevel);
-      break;
-  }
-  
-  Serial.print(", period: ");
-  Serial.print(receivedCode.period);
-  Serial.println("us.");
-  
-  
-  //Broadcasting received RF-signal
-  Udp.beginPacket(broadcast, 8889);
-  Udp.write("I,1,");
 
-  char charBuf[50];
-  String codeString(receivedCode.address);
-  codeString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
-  Udp.write(",");
-
-  String periodString(receivedCode.period);
-  periodString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
-  Udp.write(",");
-  
-  //Type
-  String typeString(receivedCode.switchType);
-  typeString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
-  
-  //Unit
-  String unitString(receivedCode.unit);
-  unitString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
-  
-  Udp.endPacket(); 
-}
 
 
 void transmitCode(unsigned long receivedCode, unsigned int period) {  
@@ -229,30 +344,10 @@ void transmitCode(unsigned long receivedCode, unsigned int period) {
   Serial.print(" / ");
   Serial.println(period);
 
-  
   RemoteReceiver::disable();
   interrupts();
   RemoteTransmitter::sendCode(8, receivedCode, period, 3);
   RemoteReceiver::enable();
 }
-
-void transmitCodeNewKaKu(NewRemoteCode receivedCode) {  
-  NewRemoteReceiver::disable();
-  interrupts();
-  NewRemoteTransmitter transmitter(receivedCode.address, 11, receivedCode.period);
-  if (receivedCode.switchType == 2) {
-    transmitter.sendDim(receivedCode.unit, receivedCode.dimLevel);	
-  } 
-  else {
-    if (receivedCode.groupBit) {
-      transmitter.sendGroup(receivedCode.switchType);
-    } 
-    else {
-      transmitter.sendUnit(receivedCode.unit, receivedCode.switchType);
-    }
-  }
-  NewRemoteReceiver::enable();
-}
-
 
 
