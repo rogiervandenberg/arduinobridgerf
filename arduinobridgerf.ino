@@ -10,7 +10,9 @@
  * I am using the interpretation of RF-signals from the RemoteSwitch Libraries by Randy Simons,
  * as found at https://bitbucket.org/fuzzillogic/433mhzforarduino/wiki/Home
  * 
- *  ==How to use==
+ * For processing the raw RF-signals for the New style KaKu I am using the code from Tymmo at http://gathering.tweakers.net/forum/list_message/37257667#37257667
+ *
+ ==How to use==
  *  Send an UDP Package to port 8888 to execute (send) a command over RF.
  *  Listen for UDP Packages on port 8889 to receive RF-commands
  * 
@@ -26,7 +28,6 @@
 
 #include <RemoteReceiver.h>
 #include <RemoteTransmitter.h>
-#include <NewRemoteTransmitter.h>
 #include <InterruptChain.h>
 #include <SPI.h>
 #include <Ethernet.h>
@@ -129,12 +130,8 @@ void handleCommand(char* receivedCommand) {
   }
 }
 
-
-
-
-//////////
-
-
+//Handles incoming RF data, part of this code is made
+// by Tymmo: http://gathering.tweakers.net/forum/list_message/37257667#37257667
 void interruptHandler() 
 { 
   if(sending) 
@@ -201,44 +198,45 @@ void interruptHandler()
                
                
      //Broadcasting received RF-signal
-  Udp.beginPacket(broadcast, 8889);
-  Udp.write("I,1,");
+    Udp.beginPacket(broadcast, 8889);
+    Udp.write("I,1,");
 
-  char charBuf[50];
-  String codeString(receivedCommand >> 6);
-  codeString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
-  Udp.write(",");
+    char charBuf[50];
+    String codeString(receivedCommand >> 6);
+    codeString.toCharArray(charBuf, 50);  
+    Udp.write(charBuf);
+    Udp.write(",");
 
-  String periodString("000");
-  periodString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
-  Udp.write(",");
+    String periodString("000");
+    periodString.toCharArray(charBuf, 50);  
+    Udp.write(charBuf);
+    Udp.write(",");
   
-  //Type
-  String typeString((receivedCommand >> 4)&0x01);
-  typeString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
+    //Type
+    String typeString((receivedCommand >> 4)&0x01);
+    typeString.toCharArray(charBuf, 50);  
+    Udp.write(charBuf);
   
-  //Unit
-  String unitString((receivedCommand)&0x0F);
-  if (unitString.length() == 1) {
-    unitString = "0" + unitString;
-  }
-  unitString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
+    //Unit
+    String unitString((receivedCommand)&0x0F);
+    if (unitString.length() == 1) {
+      unitString = "0" + unitString;
+    }
+    unitString.toCharArray(charBuf, 50);  
+    Udp.write(charBuf);
 
-  //Dim value
-  String dimString("0");
-  dimString.toCharArray(charBuf, 50);  
-  Udp.write(charBuf);
+    //Dim value
+    String dimString("0");
+    dimString.toCharArray(charBuf, 50);  
+    Udp.write(charBuf);
   
-  Udp.endPacket();            
+    Udp.endPacket();            
                
     stateCounter = -1; 
   } 
 } 
 
+//Sending RF signals, overloaded function to build raw signal
 void sendSwitch(unsigned long address, boolean group, boolean state, short unit, short repeats) 
 { 
   unsigned long transmitCommand; 
@@ -252,6 +250,7 @@ void sendSwitch(unsigned long address, boolean group, boolean state, short unit,
   sendSwitch(transmitCommand, repeats); 
 } 
 
+//Sending Raw RF signals for new KaKu
 void sendSwitch(unsigned long transmitCommand, short repeatCount) 
 { 
   sending = true; 
@@ -299,13 +298,6 @@ void sendSwitch(unsigned long transmitCommand, short repeatCount)
   
   sending = false;  
 }
-
-
-
-///////
-
-
-
 
 
 // shows the received code sent from an old-style remote switch
