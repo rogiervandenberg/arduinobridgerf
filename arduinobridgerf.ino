@@ -48,7 +48,7 @@ void setup()
   outgoingPacketBuffer.reserve(50);
   
   // Open serial communications and wait for port to open:
-  Serial.begin(9600);
+  Serial.begin(115200);
   
     // Interrupt -1 to indicate you will call the interrupt handler with InterruptChain
   RemoteReceiver::init(-1, 2, handleOldRfRemotes);
